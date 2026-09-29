@@ -1,0 +1,24 @@
+name: Validate
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: ontology
+      - name: Check out the validator
+        uses: actions/checkout@v4
+        with:
+          repository: yuengeoff/context-graph
+          token: ${{ secrets.CONTEXT_GRAPH_READ_TOKEN }}
+          path: context-graph
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+        working-directory: context-graph
+      - run: bun --cwd backend run plum:validate ../../ontology
+        working-directory: context-graph
