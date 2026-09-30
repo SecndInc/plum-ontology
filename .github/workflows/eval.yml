@@ -1,0 +1,66 @@
+name: Plum evals
+# Every ontology change runs the evals of every agent that reads it. The scenario library and the evaluator come from
+# context-graph main (pinned, so an ontology PR cannot change how it is judged); the ontology is this PR's head, compared
+# with the base branch. The gate fails on a new wrong verified answer or on a reference plan that stopped being correct.
+#
+# Canonical copy: context-graph docs/plum/ci/plum-ontology-eval.yml. Installed as .github/workflows/eval.yml here.
+on:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+  id-token: write
+  pull-requests: write
+concurrency:
+  group: plum-eval-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: ontology
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/checkout@v4
+        with:
+          repository: yuengeoff/context-graph
+          token: ${{ secrets.CONTEXT_GRAPH_READ_TOKEN }}
+          path: context-graph
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+        working-directory: context-graph
+      # Read-only access to the mirror as plum-executor, through workload identity federation (no keys).
+      - id: gcp
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: projects/284745412256/locations/global/workloadIdentityPools/github/providers/github-actions
+          service_account: plum-executor@secnd-ml.iam.gserviceaccount.com
+          token_format: access_token
+          access_token_lifetime: 3600s
+      - name: Run the scenario library on this change and on the base branch
+        id: eval
+        working-directory: context-graph/backend
+        env:
+          PLUM_BQ_ACCESS_TOKEN: ${{ steps.gcp.outputs.access_token }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          set +e
+          bun run plum:eval -- --ontology ../../ontology --ref ${{ github.event.pull_request.head.sha || github.sha }} \
+            --base-ref ${{ github.event.pull_request.base.sha || 'origin/main' }} --out ../../eval \
+            --title "Plum evals: ontology change" --subject "The agent answering the scenario library with this change's ontology, against the base branch's."
+          echo "status=$?" >> "$GITHUB_OUTPUT"
+      - name: Comment on the pull request
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh pr comment ${{ github.event.pull_request.number }} --repo ${{ github.repository }} --body-file eval/report.md --edit-last --create-if-none
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: plum-eval
+          path: eval
+      - name: Gate
+        run: exit ${{ steps.eval.outputs.status }}
