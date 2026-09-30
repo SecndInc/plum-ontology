@@ -18,29 +18,40 @@ jobs:
   eval:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # Until the one-time setup is done (context-graph scripts/plum/setup-github-ci.sh and the two secrets), the job skips with a notice.
+    env:
+      READY: ${{ secrets.ANTHROPIC_API_KEY != '' && secrets.CONTEXT_GRAPH_READ_TOKEN != '' }}
     steps:
-      - uses: actions/checkout@v4
+      - if: env.READY != 'true'
+        run: echo "::notice::Plum evals are not set up yet; see scripts/plum/setup-github-ci.sh in context-graph"
+      - if: env.READY == 'true'
+        uses: actions/checkout@v4
         with:
           path: ontology
           fetch-depth: 0
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - uses: actions/checkout@v4
+      - if: env.READY == 'true'
+        uses: actions/checkout@v4
         with:
           repository: yuengeoff/context-graph
           token: ${{ secrets.CONTEXT_GRAPH_READ_TOKEN }}
           path: context-graph
-      - uses: oven-sh/setup-bun@v2
-      - run: bun install --frozen-lockfile
+      - if: env.READY == 'true'
+        uses: oven-sh/setup-bun@v2
+      - if: env.READY == 'true'
+        run: bun install --frozen-lockfile
         working-directory: context-graph
       # Read-only access to the mirror as plum-executor, through workload identity federation (no keys).
-      - id: gcp
+      - if: env.READY == 'true'
+        id: gcp
         uses: google-github-actions/auth@v2
         with:
           workload_identity_provider: projects/284745412256/locations/global/workloadIdentityPools/github/providers/github-actions
           service_account: plum-executor@secnd-ml.iam.gserviceaccount.com
           token_format: access_token
           access_token_lifetime: 3600s
-      - name: Run the scenario library on this change and on the base branch
+      - if: env.READY == 'true'
+        name: Run the scenario library on this change and on the base branch
         id: eval
         working-directory: context-graph/backend
         env:
@@ -53,14 +64,15 @@ jobs:
             --title "Plum evals: ontology change" --subject "The agent answering the scenario library with this change's ontology, against the base branch's."
           echo "status=$?" >> "$GITHUB_OUTPUT"
       - name: Comment on the pull request
-        if: github.event_name == 'pull_request'
+        if: env.READY == 'true' && github.event_name == 'pull_request'
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh pr comment ${{ github.event.pull_request.number }} --repo ${{ github.repository }} --body-file eval/report.md --edit-last --create-if-none
       - uses: actions/upload-artifact@v4
-        if: always()
+        if: always() && env.READY == 'true'
         with:
           name: plum-eval
           path: eval
-      - name: Gate
+      - if: env.READY == 'true'
+        name: Gate
         run: exit ${{ steps.eval.outputs.status }}
